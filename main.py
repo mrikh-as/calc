@@ -1,4 +1,5 @@
 from enum import Enum
+from datetime import datetime
 from typing import Union, Optional
 from dataclasses import dataclass, field
 
@@ -120,11 +121,8 @@ class CustomCoeffs:
     Kdate_dou: Union[int, float] = field(
         metadata={"description": "Коэффициент цены на дату постановления ДОУ"}
     )
-    Kcorr_sosh: Optional[Union[int, float]] = field(
-        default=None, metadata={"description": "Корректировочный коэффициент СОШ"}
-    )
-    Kcorr_dou: Optional[Union[int, float]] = field(
-        default=None, metadata={"description": "Корректировочный коэффициент ДОУ"}
+    Kcorr: Optional[Union[int, float]] = field(
+        default=1.0, metadata={"description": "Корректировочный коэффициент"}
     )
 
 
@@ -140,7 +138,7 @@ class BasicCoeffs:
         metadata={"description": "Средняя стоимость региона"}
     )
     Kcorr: Optional[Union[int, float]] = field(
-        default=None, metadata={"description": "Корректировочный коэффициент"}
+        default=1.0, metadata={"description": "Корректировочный коэффициент"}
     )
 
 
@@ -411,6 +409,54 @@ class Calculator:
         ),
     }
 
+    _coeffs_log = []
+
+    @classmethod
+    def set_kcorr(cls, region: Regions, kcorr: Union[int, float]):
+        """Метод для бизнеса, позволяющий ежеквартально изменять корректировочный коэффициент"""
+        if region not in cls._coeffs:
+            raise ValueError(f"Регион {region} не существует")
+        elif not isinstance(region, Regions):
+            raise TypeError(
+                f"Регион должен быть одним из значений класса Regions, но получен {type(region)}"
+            )
+        elif not isinstance(kcorr, (int, float)) or kcorr <= 0:
+            raise ValueError("Коэффициент должен быть положительным числом")
+
+        old_obj = cls._coeffs[region]
+
+        change_record = {
+            "region": region,
+            "timestamp": datetime.now(),
+            "old_value": old_obj.Kcorr,
+            "new_value": kcorr,
+        }
+        cls._coeffs_log.append(change_record)
+
+        if isinstance(old_obj, CustomCoeffs):
+            new_obj = CustomCoeffs(
+                Sob=old_obj.Sob,
+                Ksosh=old_obj.Ksosh,
+                Kdou=old_obj.Kdou,
+                Ktek_sosh=old_obj.Ktek_sosh,
+                Ktek_dou=old_obj.Ktek_dou,
+                Cpost_sosh=old_obj.Cpost_sosh,
+                Cpost_dou=old_obj.Cpost_dou,
+                Kdate_sosh=old_obj.Kdate_sosh,
+                Kdate_dou=old_obj.Kdate_dou,
+                Kcorr=kcorr,
+            )
+        else:
+            new_obj = BasicCoeffs(
+                Сmin=old_obj.Сmin, Сmax=old_obj.Сmax, Сavg=old_obj.Сavg, Kcorr=kcorr
+            )
+        cls._coeffs[region] = new_obj
+
+    @classmethod
+    def get_history(cls):
+        """Метод для просмотра истории изменений корректирующих коэффициентов"""
+        return cls._coeffs_log
+
     def __init__(self, region: Regions):
         if not isinstance(region, Regions):
             raise TypeError(
@@ -437,34 +483,26 @@ class Calculator:
             else:
                 Skv = area
 
-            Cpost_sosh = d.Cpost_sosh
-            Cpost_dou = d.Cpost_dou
-            Kdate_sosh = d.Kdate_sosh
-            Kdate_dou = d.Kdate_dou
-            Ktek_sosh = d.Ktek_sosh
-            Ktek_dou = d.Ktek_dou
-            Sob = d.Sob
-            Ksosh = d.Ksosh
-            Kdou = d.Kdou
-
-            Csosh = (Cpost_sosh / Kdate_sosh) * Ktek_sosh
-            Cdou = (Cpost_dou / Kdate_dou) * Ktek_dou
-            Ctotal_sosh = (Skv / (Sob * 1000)) * Ksosh * Csosh
-            Ctotal_dou = (Skv / (Sob * 1000)) * Kdou * Cdou
+            amount_sosh = (Skv / (d.Sob * 1000)) * d.Ksosh
+            amount_dou = (Skv / (d.Sob * 1000)) * d.Kdou
+            cost_sosh = (d.Cpost_sosh / d.Kdate_sosh) * d.Ktek_sosh * d.Kcorr
+            cost_dou = (d.Cpost_dou / d.Kdate_dou) * d.Ktek_dou * d.Kcorr
+            total_costs_sosh = (Skv / (d.Sob * 1000)) * d.Ksosh * cost_sosh
+            total_costs_dou = (Skv / (d.Sob * 1000)) * d.Kdou * cost_dou
 
             return {
                 "Площадь квартир": f"{area} кв.м.",
-                "Количество СОШ": f"{(Skv / (Sob * 1000)) * Ksosh:.2f} штук",
-                "Количество ДОУ": f"{(Skv / (Sob * 1000)) * Kdou:.2f} штук",
-                "Стоимость одного места СОШ": f"{Csosh:.2f} млн. руб.",
-                "Стоимость одного места ДОУ": f"{Cdou:.2f} млн. руб.",
-                "Общая стоимость СОШ": f"{Ctotal_sosh:.2f} млн. руб.",
-                "Общая стоимость ДОУ": f"{Ctotal_dou:.2f} млн. руб.",
-                "Совокупная стоимость СОШ и ДОУ": f"{round(Ctotal_sosh + Ctotal_dou, 2)} млн. руб.",
+                "Количество СОШ": f"{amount_sosh:.2f} штук",
+                "Количество ДОУ": f"{amount_dou:.2f} штук",
+                "Стоимость одного места СОШ": f"{cost_sosh:.2f} млн. руб.",
+                "Стоимость одного места ДОУ": f"{cost_dou:.2f} млн. руб.",
+                "Общая стоимость СОШ": f"{total_costs_sosh:.2f} млн. руб.",
+                "Общая стоимость ДОУ": f"{total_costs_dou:.2f} млн. руб.",
+                "Совокупная стоимость СОШ и ДОУ": f"{total_costs_sosh + total_costs_dou:.2f} млн. руб.",
             }
         else:
             amount = (area / 20) * 0.08
-            costs = amount * d.Сavg
+            costs = amount * d.Сavg * d.Kcorr
             return {
                 "Площадь квартир": f"{area} кв.м.",
                 "Количество социальных объектов": f"{amount:.2f} штук",
@@ -474,13 +512,16 @@ class Calculator:
 
 if __name__ == "__main__":
     calc = Calculator(Regions(77))
+    calc2 = Calculator(Regions.АДЫГЕЯ_РЕСПУБЛИКА)
+
     result = calc.calc(1000)
     for key, value in result.items():
         print(f"{key}: {value}")
-
-    calc2 = Calculator(Regions.АДЫГЕЯ_РЕСПУБЛИКА)
-    result = calc2.calc(1000)
+    result2 = calc2.calc(1000)
     for key, value in result.items():
         print(f"{key}: {value}")
 
-    coefs = Calculator._coeffs
+    Calculator.set_kcorr(Regions(77), 1.5)
+    print(Calculator._coeffs)
+    print(Calculator.get_history())
+    Calculator.set_kcorr(Regions(77), 1)
